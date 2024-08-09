@@ -180,7 +180,6 @@ pub fn read_string_from_address(mut file: File, address: u64, length: u64) -> io
 }
 
 fn main() -> io::Result<()> {
-    // 获取传递的路径
     let args: Vec<String> = env::args().collect();
     if args.len() != 2 {
         eprintln!("Usage: {} <elf-file>", args[0]);
@@ -188,7 +187,6 @@ fn main() -> io::Result<()> {
     }
     let path = &args[1];
 
-    // 读取文件内容
     let mut file = File::open(path).unwrap();
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer).unwrap();
