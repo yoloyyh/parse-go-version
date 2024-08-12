@@ -2,12 +2,14 @@ use std::env;
 use std::fs::File;
 use std::io::{self, Read};
 use goblin::elf::Elf;
+use goblin::elf::Sym;
 use byteorder::{ByteOrder, LittleEndian, BigEndian};
 use regex::Regex;
 use std::io::Seek;
 use std::io::SeekFrom;
 
 const MAGIC: &[u8] = b"\xff Go buildinf:";
+const RUNTIME_VERSION_MAGIC: &str = "runtime.buildVersion";
 const EXPECTED_MAGIC_LEN: usize = 14;
 const FLAGS_OFFSET: usize = 15;
 
@@ -92,6 +94,77 @@ fn read_data_at_address(mut file: &File, elf: &Elf, address: u64, size: usize) -
     Some(buffer)
 }
 
+pub fn read_string_from_address(mut file: File, address: u64, length: u64) -> io::Result<String> {
+
+    file.seek(SeekFrom::Start(address))?;
+
+    let mut version_bytes = vec![0; length as usize];
+    file.read_exact(&mut version_bytes)?;
+
+    let version = String::from_utf8_lossy(&version_bytes).to_string();
+    Ok(version)
+}
+
+fn find_symbol<'a>(elf: &'a Elf<'a>, symbol_name: &str) -> Option<Sym> {
+    for sym in &elf.syms {
+        if let Some(name) = elf.strtab.get_at(sym.st_name) {
+            if name == symbol_name {
+                return Some(sym.clone());
+            }
+        }
+    }
+    
+    None
+}
+
+fn find_by_symbol(elf: &Elf, file: &File) -> String {
+    let mut version: String = String::new();
+    // find runtime.buildVersion symbol
+    let symbol= find_symbol(&elf, RUNTIME_VERSION_MAGIC);
+    if let Some(sym) = symbol {
+        // read version data
+        let version_address_ptr = sym.st_value;
+        let version_len = sym.st_size;
+
+        let version_u8 = match read_data_at_address(&file, &elf, version_address_ptr, version_len as usize) {
+            Some(data) => data,
+            None => {
+                eprintln!("Failed to read version data");
+                return version;
+            }
+        };
+        println!("find symbol version: {:?}", version_u8);
+        let ptr_size = version_len / 2;
+        let version_address = match read_ptr(&version_u8, ptr_size as usize, true) {
+            Some(ptr) => ptr,
+            None => {
+                eprintln!("Failed to read version addr pointer");
+                return version;
+            }
+        };
+        let version_address_len = match read_ptr(&version_u8[ptr_size as usize..], ptr_size as usize, true) {
+            Some(ptr) => ptr,
+            None => {
+                eprintln!("Failed to read version length pointer");
+                return version;
+            }
+        };
+
+        let version_addr_u8 = match read_data_at_address(&file, &elf, version_address, version_address_len as usize) {
+            Some(data) => data,
+            None => {
+                eprintln!("Failed to read version data");
+                return version;
+            }
+        };
+        version = String::from_utf8_lossy(&version_addr_u8).to_string();
+        println!("find symbol version: {}", version);
+    } else {
+        eprintln!("Failed to find symbol: runtime.buildVersion");
+    }
+    version
+}
+
 fn find_by_section(elf: &Elf, buffer:&Vec<u8>, file: &File) -> String {
     let mut version: String = String::new();
     
@@ -117,7 +190,7 @@ fn find_by_section(elf: &Elf, buffer:&Vec<u8>, file: &File) -> String {
             // length-prefixed (as varint) string contents. First is the version
             // string, followed immediately by the modinfo string.
             if flag & FLAGS_VERSION_MASK == FLAGS_VERSION_MASK {
-                let version_u8 = match read_data_at_address(&file, &elf, go_buildinfo_section.sh_addr + BUILDINFO_HEADER_SIZE  as u64, MAX_VAR_INT_LEN64) {
+                let version_u8 = match read_data_at_address(&file, &elf, go_buildinfo_section.sh_addr + BUILDINFO_HEADER_SIZE as u64, MAX_VAR_INT_LEN64) {
                     Some(data) => data,
                     None => {
                         eprintln!("Failed to read version data");
@@ -125,8 +198,9 @@ fn find_by_section(elf: &Elf, buffer:&Vec<u8>, file: &File) -> String {
                     }
                 };
                 let len = uvarint(&version_u8).0;
+                let offset = uvarint(&version_u8).1;
 
-                version = String::from_utf8_lossy(&buildinfo_data[BUILDINFO_HEADER_SIZE + 1 ..BUILDINFO_HEADER_SIZE + 1 + len as usize]).to_string();
+                version = String::from_utf8_lossy(&buildinfo_data[BUILDINFO_HEADER_SIZE + offset as usize ..BUILDINFO_HEADER_SIZE + len as usize + offset as usize ]).to_string();
                 println!("version: {}", version);
 
             } else {
@@ -159,7 +233,6 @@ fn find_by_section(elf: &Elf, buffer:&Vec<u8>, file: &File) -> String {
                         };
                 
                         version = String::from_utf8_lossy(&version_u8).to_string();
-                        println!("version: {}", version);
                     }
                 }
             }
@@ -168,18 +241,8 @@ fn find_by_section(elf: &Elf, buffer:&Vec<u8>, file: &File) -> String {
     version
 }
 
-pub fn read_string_from_address(mut file: File, address: u64, length: u64) -> io::Result<String> {
-
-    file.seek(SeekFrom::Start(address))?;
-
-    let mut version_bytes = vec![0; length as usize];
-    file.read_exact(&mut version_bytes)?;
-
-    let version = String::from_utf8_lossy(&version_bytes).to_string();
-    Ok(version)
-}
-
 fn main() -> io::Result<()> {
+    // 获取传递的路径
     let args: Vec<String> = env::args().collect();
     if args.len() != 2 {
         eprintln!("Usage: {} <elf-file>", args[0]);
@@ -187,6 +250,7 @@ fn main() -> io::Result<()> {
     }
     let path = &args[1];
 
+    // 读取文件内容
     let mut file = File::open(path).unwrap();
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer).unwrap();
@@ -203,6 +267,7 @@ fn main() -> io::Result<()> {
     let version = find_by_section(&elf, &buffer, &file);
     if version.is_empty() {
         println!("get go version by elf failed");
+        find_by_symbol(&elf, &file);
         
     } else {
        println!("get go version: {}", parse_version(&version));
@@ -210,5 +275,3 @@ fn main() -> io::Result<()> {
     
     Ok(())
 }
-
-
