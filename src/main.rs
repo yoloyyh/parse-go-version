@@ -1,12 +1,9 @@
 use std::env;
 use std::fs::File;
-use std::io::{self, Read};
-use goblin::elf::Elf;
-use goblin::elf::Sym;
+use goblin::elf::{Elf, Sym};
 use byteorder::{ByteOrder, LittleEndian, BigEndian};
 use regex::Regex;
-use std::io::Seek;
-use std::io::SeekFrom;
+use std::io::{self, Read, Seek, SeekFrom};
 
 const MAGIC: &[u8] = b"\xff Go buildinf:";
 const RUNTIME_VERSION_MAGIC: &str = "runtime.buildVersion";
@@ -24,7 +21,7 @@ const FLAGS_ENDIAN_BIG: u8   = 0x1;
 fn parse_version(version: &String) -> &str {
      let re = Regex::new(r"^go(\d+\.\d+)(?:\.\d+)?").unwrap();
 
-     // 使用正则进行匹配
+     // use regex to extract the version number from the string
      if let Some(captures) = re.captures(version) {
          if let Some(version_number) = captures.get(1) {
              let extracted_version = version_number.as_str();
@@ -125,6 +122,7 @@ fn find_by_symbol(elf: &Elf, file: &File) -> String {
         // read version data
         let version_address_ptr = sym.st_value;
         let version_len = sym.st_size;
+        let is_little_endian = elf.little_endian;
 
         let version_u8 = match read_data_at_address(&file, &elf, version_address_ptr, version_len as usize) {
             Some(data) => data,
@@ -135,14 +133,14 @@ fn find_by_symbol(elf: &Elf, file: &File) -> String {
         };
         println!("find symbol version: {:?}", version_u8);
         let ptr_size = version_len / 2;
-        let version_address = match read_ptr(&version_u8, ptr_size as usize, true) {
+        let version_address = match read_ptr(&version_u8, ptr_size as usize, is_little_endian) {
             Some(ptr) => ptr,
             None => {
                 eprintln!("Failed to read version addr pointer");
                 return version;
             }
         };
-        let version_address_len = match read_ptr(&version_u8[ptr_size as usize..], ptr_size as usize, true) {
+        let version_address_len = match read_ptr(&version_u8[ptr_size as usize..], ptr_size as usize, is_little_endian) {
             Some(ptr) => ptr,
             None => {
                 eprintln!("Failed to read version length pointer");
@@ -267,7 +265,12 @@ fn main() -> io::Result<()> {
     let version = find_by_section(&elf, &buffer, &file);
     if version.is_empty() {
         println!("get go version by elf failed");
-        find_by_symbol(&elf, &file);
+        let version = find_by_symbol(&elf, &file);
+        if version.is_empty() {
+            println!("get go version by symbol failed");
+        } else {
+            println!("get go version: {}", parse_version(&version));
+        }
         
     } else {
        println!("get go version: {}", parse_version(&version));
