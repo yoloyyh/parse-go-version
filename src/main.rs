@@ -240,7 +240,7 @@ fn find_by_section(elf: &Elf, buffer:&Vec<u8>, file: &File) -> String {
 }
 
 fn main() -> io::Result<()> {
-    // 获取传递的路径
+    // get path
     let args: Vec<String> = env::args().collect();
     if args.len() != 2 {
         eprintln!("Usage: {} <elf-file>", args[0]);
@@ -248,7 +248,7 @@ fn main() -> io::Result<()> {
     }
     let path = &args[1];
 
-    // 读取文件内容
+    // read data
     let mut file = File::open(path).unwrap();
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer).unwrap();
