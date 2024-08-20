@@ -1,5 +1,5 @@
 # parse-go-version
-parse go ELF version support go 1.2 ~ 1.22
+parse go ELF version support go 1.13 ~ 1.22
 
 # Reference
 use rust parse go elf get version, refence: https://github.com/golang/go/blob/master/src/debug/buildinfo/buildinfo.go
