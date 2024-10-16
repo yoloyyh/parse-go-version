@@ -4,7 +4,8 @@ use goblin::elf::{Elf, Sym};
 use byteorder::{ByteOrder, LittleEndian, BigEndian};
 use regex::Regex;
 use std::io::{self, Read, Seek, SeekFrom};
-
+use memmap::Mmap;
+use memmap::MmapOptions;
 const MAGIC: &[u8] = b"\xff Go buildinf:";
 const RUNTIME_VERSION_MAGIC: &str = "runtime.buildVersion";
 const EXPECTED_MAGIC_LEN: usize = 14;
@@ -163,7 +164,7 @@ fn find_by_symbol(elf: &Elf, file: &File) -> String {
     version
 }
 
-fn find_by_section(elf: &Elf, buffer:&Vec<u8>, file: &File) -> String {
+fn find_by_section(elf: &Elf, file: &File) -> String {
     let mut version: String = String::new();
     
     
@@ -175,9 +176,21 @@ fn find_by_section(elf: &Elf, buffer:&Vec<u8>, file: &File) -> String {
             false
         }
     }) {
-         // read ".go.buildinfo" section data
-        let buildinfo_data = &buffer[go_buildinfo_section.sh_offset as usize
-        ..(go_buildinfo_section.sh_offset + go_buildinfo_section.sh_size) as usize];
+        // read ".go.buildinfo" section data
+        let start = go_buildinfo_section.sh_offset as usize;
+        let end = (go_buildinfo_section.sh_offset + go_buildinfo_section.sh_size) as usize;
+ 
+         // Memory map the specific section
+        let mmap = match unsafe { Mmap::map(file) } {
+            Ok(m) => m,
+            Err(_) => return version, // Return empty string if mmap fails
+        };
+        if mmap.len() < end {
+            return version; // Return empty string if the section is out of bounds
+        }
+ 
+        // Extract the data of the section
+        let buildinfo_data = &mmap[start..end];
 
         // check Magic
         let magic_header = &buildinfo_data[0..EXPECTED_MAGIC_LEN];
@@ -248,21 +261,20 @@ fn main() -> io::Result<()> {
     }
     let path = &args[1];
 
-    // read data
-    let mut file = File::open(path).unwrap();
-    let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer).unwrap();
-
-    // parse elf
-    let elf = match Elf::parse(&buffer) {
-        Ok(elf) => elf,
-        Err(err) => {
-            eprintln!("Failed to parse ELF file: {}", err);
-            return  Ok(());
-        }
-    };
+     // read data
+     let file = File::open(path).unwrap();
+     let buffer  = unsafe { MmapOptions::new().map(&file)? };
+ 
+     // parse elf
+     let elf = match Elf::parse(&buffer) {
+         Ok(elf) => elf,
+         Err(err) => {
+             eprintln!("Failed to parse ELF file: {}", err);
+             return  Ok(());
+         }
+     };
     
-    let version = find_by_section(&elf, &buffer, &file);
+    let version = find_by_section(&elf, &file);
     if version.is_empty() {
         println!("get go version by elf failed");
         let version = find_by_symbol(&elf, &file);
